@@ -64,7 +64,7 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk ../tempo-debug.apk
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tempo-apk
           path: tempo-*.apk
