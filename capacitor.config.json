@@ -1,0 +1,14 @@
+{
+  "appId": "app.tempo.study",
+  "appName": "Tempo",
+  "webDir": "dist",
+  "loggingBehavior": "none",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  }
+}
