@@ -187,3 +187,42 @@ test('files: sniff trusts bytes', () => {
   assert.equal(sniff(pad([0x4d, 0x5a])), null); // Windows exe
   assert.equal(sniff(new Uint8Array(3)), null);
 });
+
+// Real OCR output from phone screenshots of a syllabus: mangled bullets, en-dash headings, "Il" for III.
+test('parser: noisy syllabus OCR (round bullets read as e, UNIT – I headings, wrapped titles)', () => {
+  const o = structure(`4 Learning Objectives 914 mm 4G+ 7
+e Enrich students with knowledge of the Constitution.
+Learning outcomes
+e Understand the Constitution and its relevance
+SYLLABUS OF CONSTITUTIONAL VALUES AND FUNDAMENTAL DUTIES
+UNIT-1 The Constitution of India — An Introduction (5 Weeks)
+e Federal Republic, Rule of Law, Separation of Powers
+e Secularism and Sarva Dharma Sama Bhava
+UNIT —II Constitutional Values (5 Weeks)
+e Justice: Social, Political, Economic
+UNIT -II1 Fundamental Duties (5 Weeks)
+e Legal status of Fundamental Duties - Judicial approach
+Practical component (if any) — (15 Weeks)
+e Conduct workshops to spread awareness
+Essential/recommended readings
+e Preamble to the Constitution of India, 1950.`, { title: 'CV' });
+  assert.equal(o.length, 3);
+  assert.deepEqual(o.map(u => u.title), ['Unit 1: The Constitution of India — An Introduction', 'Unit II: Constitutional Values', 'Unit 3: Fundamental Duties']);
+  assert.deepEqual(flat(o), ['Federal Republic, Rule of Law, Separation of Powers', 'Secularism and Sarva Dharma Sama Bhava', 'Justice: Social, Political, Economic', 'Legal status of Fundamental Duties - Judicial approach']);
+});
+
+test('parser: wrapped unit headings are joined and "(3 weeks)" tags dropped', () => {
+  const o = structure(`Unit IV: Extending Political Communication and Leadership: Research Issues and
+Challenges (3 weeks)
+e Examining Contemporary Issues`);
+  assert.equal(o[0].title, 'Unit IV: Extending Political Communication and Leadership: Research Issues and Challenges');
+});
+
+test('parser: a unit written as running text becomes one topic per phrase', () => {
+  const o = structure(`Unit 1- Introduction to Matrix Algebra: Echelon form of a Matrix, Rank of a Matrix,
+Determinant and Inverse of a matrix, Gauss elimination and Gauss Jordan Method.
+Unit 2 - Vector Space, Sub-spaces, Linear Combinations, Basis & Dimension`);
+  assert.equal(o.length, 2);
+  assert.ok(o[0].chapters[0].topics.some(t => t.title === 'Rank of a Matrix'));
+  assert.equal(o[1].chapters[0].topics.length, 1); // a unit with nothing under it still survives
+});

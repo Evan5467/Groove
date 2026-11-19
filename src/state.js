@@ -3,6 +3,7 @@ import { IDBStore } from './core/storage.js';
 import { defaultSettings, sanitizeMaterial, sanitizeRoutine, sanitizeSettings, sanitizeTask } from './core/schema.js';
 import { generatePlan, nextStudyDay } from './core/plan.js';
 import { clearReminders } from './io/notify.js';
+import { STARTER, starterOutline, starterTopics } from './core/starter.js';
 import { addDays, parseISO, todayISO, uid, weekStart } from './core/util.js';
 
 export const vault = new Vault(new IDBStore());
@@ -174,6 +175,32 @@ export async function upsertRoutine(raw) {
 export async function deleteRoutine(id) {
   await vault.delRecord('routine', id);
   S.routines = S.routines.filter(r => r.id !== id);
+}
+
+export const starterPending = () => STARTER.some(sub => !S.materials.some(m => m.title === sub.title));
+
+// Loads the Semester 1 subjects. Dated sessions before today are skipped (their topics stay in the library).
+export async function loadStarter() {
+  const today = todayISO();
+  let subjects = 0, sessions = 0, seq = 0;
+  for (const sub of STARTER) {
+    if (S.materials.some(m => m.title === sub.title)) continue;
+    const m = await addMaterial({ title: sub.title, rawText: '', outline: starterOutline(sub), source: 'typed', files: [] });
+    if (sub.examDate && sub.examDate >= today) { m.examDate = sub.examDate; await saveMaterial(m); }
+    subjects++;
+    const data = starterTopics(sub), saved = topicsOf(m);
+    for (let i = 0; i < data.length && i < saved.length; i++) {
+      if (!data[i].on || data[i].on < today) continue;
+      const task = await upsertTask({ date: data[i].on, title: saved[i].title, minutes: data[i].minutes, kind: 'study', materialId: m.id, topicId: saved[i].id, sub: m.title, createdAt: Date.now() + seq++ });
+      if (task) sessions++;
+    }
+    for (const x of sub.extra) {
+      if (x.date < today) continue;
+      const task = await upsertTask({ date: x.date, title: x.title, minutes: x.minutes, kind: x.kind, materialId: m.id, sub: m.title, createdAt: Date.now() + seq++ });
+      if (task) sessions++;
+    }
+  }
+  return { subjects, sessions };
 }
 
 export async function wipeAll() {

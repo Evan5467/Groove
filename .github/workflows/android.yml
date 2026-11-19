@@ -22,8 +22,22 @@ jobs:
       - name: Dependency audit (runtime packages)
         run: npm audit --omit=dev --audit-level=high
 
-  android:
+  # Real browser check: on-device OCR and PDF reading under the app's own strict CSP.
+  browser:
     needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm install --no-save --no-audit --no-fund playwright-core
+      - run: node scripts/copy-ocr-assets.mjs
+      - run: node scripts/smoke.mjs
+
+  android:
+    needs: [test, browser]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +49,11 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm install --no-audit --no-fund
+      # Keeps the same debug signing key between builds, so a new APK installs over the old one without uninstalling.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: tempo-debug-keystore-v1
       - run: npm run build
       - run: npx cap add android
       - run: node scripts/harden-android.mjs

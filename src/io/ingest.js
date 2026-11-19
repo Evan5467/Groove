@@ -7,9 +7,18 @@ import { ocrImage } from './ocr.js';
 import { extractPdf } from './pdf.js';
 import { prepareImage } from './image.js';
 
+const toB64 = bytes => {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+
+// ai = { apiKey, model, vision } or null. With vision on, photos go to the AI instead of the on-device reader
+// (the reader is still the fallback if the AI is unreachable).
 export async function ingest({ files, text, title, ai, onStatus }) {
   const stored = [];
   const chunks = [];
+  const pics = []; // { name, blob, b64 } kept for the AI or the fallback reader
   const typed = cleanText(text, 200000);
   if (typed) chunks.push(typed);
 
@@ -28,8 +37,11 @@ export async function ingest({ files, text, title, ai, onStatus }) {
         stored.push({ meta: { id: uid(), name, type: 'application/pdf', size: bytes.length }, bytes });
       } else {
         const img = await prepareImage(file);
-        onStatus(`Recognising text in ${name}…`);
-        chunks.push(await ocrImage(img.blob, p => onStatus(`Recognising text in ${name}… ${p}%`)));
+        if (ai?.vision) pics.push({ name, blob: img.blob, b64: toB64(img.bytes) });
+        else {
+          onStatus(`Recognising text in ${name}…`);
+          chunks.push(await ocrImage(img.blob, p => onStatus(`Recognising text in ${name}… ${p}%`)));
+        }
         stored.push({ meta: { id: uid(), name, type: 'image/jpeg', size: img.bytes.length }, bytes: img.bytes });
       }
     } catch (e) {
@@ -38,20 +50,31 @@ export async function ingest({ files, text, title, ai, onStatus }) {
     }
   }
 
-  const rawText = cleanText(chunks.join('\n\n'), 300000);
-  if (rawText.length < 8) throw new UserError('No readable text found. Try a clearer, well-lit photo, or type it in.');
-
   let outline = null;
   let source = files.length ? 'scan' : 'typed';
-  if (ai) {
+  if (pics.length) {
     try {
-      onStatus('Structuring with AI…');
-      outline = await aiStructure(rawText, ai);
+      onStatus('AI is reading your photos…');
+      outline = await aiStructure(cleanText(chunks.join('\n\n'), 300000), { ...ai, images: pics.map(p => p.b64) });
       source = 'ai';
-    } catch {
-      onStatus('AI was unavailable, so offline structuring was used.');
+    } catch (e) {
+      onStatus(`${e instanceof UserError ? e.message : 'AI was unavailable.'} Using the on-device reader instead…`);
+      for (const p of pics) chunks.push(await ocrImage(p.blob, n => onStatus(`Recognising text in ${p.name}… ${n}%`)));
     }
   }
-  if (!outline) outline = structure(rawText, { title });
+  const rawText = cleanText(chunks.join('\n\n'), 300000);
+  if (!outline) {
+    if (rawText.length < 8) throw new UserError('No readable text found. Try a clearer, well-lit photo, or type it in.');
+    if (ai && !pics.length) {
+      try {
+        onStatus('Structuring with AI…');
+        outline = await aiStructure(rawText, ai);
+        source = 'ai';
+      } catch {
+        onStatus('AI was unavailable, so offline structuring was used.');
+      }
+    }
+    if (!outline) outline = structure(rawText, { title });
+  }
   return { rawText, outline, files: stored, source };
 }

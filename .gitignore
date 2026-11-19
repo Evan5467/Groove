@@ -8,3 +8,5 @@ public/ocr/
 *.keystore
 *.apk
 .DS_Store
+smoke.html
+dist-smoke/

@@ -1,7 +1,7 @@
 import { h, icon, toast, openSheet, confirmSheet, trackUrl, revokeUrls } from './dom.js';
 import {
   S, bus, vault, loadAll, saveSettings, addMaterial, saveMaterial, deleteMaterial, topicsOf, topicState,
-  buildPlan, toggleItem, upsertTask, deleteTask, upsertRoutine, deleteRoutine, wipeAll, shiftDay, overdueTasks, replanOverdue, markBackup
+  buildPlan, toggleItem, upsertTask, deleteTask, upsertRoutine, deleteRoutine, wipeAll, shiftDay, overdueTasks, replanOverdue, markBackup, loadStarter, starterPending
 } from './state.js';
 import { backupDue } from './core/remind.js';
 import { remindersSupported, reminderPermission, requestReminderPermission, testReminder } from './io/notify.js';
@@ -61,6 +61,7 @@ function banners() {
       h('p', {}, h('strong', {}, `${late.length} session${late.length === 1 ? '' : 's'} slipped past.`), ' Move them to your next free days?'),
       btn('Re-plan', 'primary sm', async () => { await replanOverdue(); toast('Re-planned from today.'); render(); })));
   }
+  if (S.nav.date === todayISO() && S.nav.view === 'today') out.push(starterCard());
   if (backupDue(S.settings)) {
     out.push(h('div', { class: 'banner' },
       h('p', {}, h('strong', {}, 'Time for a backup.'), ' Your data lives only on this phone.'),
@@ -263,6 +264,7 @@ function libraryView() {
   const list = S.materials;
   return [
     h('header', { class: 'hero' }, h('p', { class: 'eyebrow' }, 'Library'), h('h1', { class: 'display' }, 'Your', h('em', {}, 'material'))),
+    starterCard(),
     list.length ? h('div', { class: 'stack' }, list.map(m => {
       const ts = topicsOf(m);
       return h('button', { class: 'mat', type: 'button', onClick: () => { S.nav.materialId = m.id; render(); window.scrollTo(0, 0); } },
@@ -313,10 +315,25 @@ function addMenu() {
   openSheet('Add', close => h('div', { class: 'stack' }, [
     ['upload', 'Study material', 'Photos, PDFs or typed notes → structured routine', () => materialSheet()],
     ['task', 'One task', 'A dated to-do with a time estimate', () => taskSheet(null)],
-    ['repeat', 'Recurring routine', 'Weekly blocks like “Python practice, Mon–Fri”', () => routineSheet(null)]
-  ].map(([ic, t, d, fn]) => h('button', { class: 'menu-row', type: 'button', onClick: () => { close(); fn(); } },
+    ['repeat', 'Recurring routine', 'Weekly blocks like “Python practice, Mon–Fri”', () => routineSheet(null)],
+    starterPending() && ['library', 'Semester 1 starter pack', 'CSA schedule, Maths, Political Communication, Constitutional Values', () => starterSheet()]
+  ].filter(Boolean).map(([ic, t, d, fn]) => h('button', { class: 'menu-row', type: 'button', onClick: () => { close(); fn(); } },
     h('span', { class: 'menu-ic' }, icon(ic)), h('span', {}, h('span', { class: 'title' }, t), h('span', { class: 'meta block' }, d))))));
 }
+
+function starterSheet() {
+  openSheet('Semester 1 starter pack', close => [
+    h('p', { class: 'muted' }, 'Adds four subjects with their units and topics, plus your Computer System Architecture day-by-day schedule up to the 11 Dec theory exam (practical and viva on 28 Nov). Days that have already passed are left out.'),
+    h('p', { class: 'muted' }, 'Maths, Political Communication and Constitutional Values are added as topics only. Open each one and tap Build routine with its exam date.'),
+    h('div', { class: 'row end' }, btn('Cancel', 'ghost', () => close()), btn('Add to my library', 'primary', async () => {
+      const r = await loadStarter();
+      close(); render();
+      toast(r.subjects ? `Added ${r.subjects} subject${r.subjects === 1 ? '' : 's'} and ${r.sessions} scheduled session${r.sessions === 1 ? '' : 's'}.` : 'Already added.');
+    }))
+  ]);
+}
+
+const starterCard = () => starterPending() && h('div', { class: 'banner' }, h('p', {}, 'Your Semester 1 syllabus and CSA schedule are ready to add.'), btn('Add them', 'primary sm', () => starterSheet()));
 
 function materialSheet() {
   let files = [];
@@ -327,6 +344,7 @@ function materialSheet() {
   const picker = h('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'sr-only' });
   const canAI = S.settings.aiEnabled && S.settings.apiKey;
   const useAI = h('input', { type: 'checkbox' });
+  const useVision = h('input', { type: 'checkbox' });
 
   const paintFiles = () => names.replaceChildren(...files.map((f, i) =>
     h('div', { class: 'file-chip' }, h('span', {}, f.name), h('button', { type: 'button', 'aria-label': 'Remove ' + f.name, onClick: () => { files.splice(i, 1); paintFiles(); } }, icon('x', 14)))));
@@ -347,11 +365,14 @@ function materialSheet() {
         const name = clean(title.value, 80) || (files[0] ? clean(files[0].name.replace(/\.[^.]+$/, ''), 80) : 'Notes ' + fmtDM(todayISO()));
         const r = await ingest({
           files, text: text.value, title: name, onStatus: s => { status.textContent = s; },
-          ai: canAI && useAI.checked ? { apiKey: S.settings.apiKey, model: S.settings.model } : null
+          ai: canAI && (useAI.checked || useVision.checked) ? { apiKey: S.settings.apiKey, model: S.settings.model, vision: useVision.checked } : null
         });
         const m = await addMaterial({ title: name, ...r });
         close();
         planSheet(m, true);
+      } catch (e) {
+        status.textContent = e instanceof UserError ? e.message : 'That did not work. Try again, or type the text in.';
+        throw e;
       } finally { run.disabled = false; }
     }));
     return [
@@ -360,6 +381,7 @@ function materialSheet() {
         h('p', { class: 'hint' }, 'Text is read on this phone. JPG, PNG, WebP or PDF, up to 25 MB each.')),
       field('Typed notes', text),
       canAI && h('label', { class: 'check' }, useAI, h('span', {}, 'Use AI to structure this. Only the extracted text is sent to Anthropic, never the files.')),
+      canAI && h('label', { class: 'check' }, useVision, h('span', {}, 'Let AI read the photos (best for screenshots and tables). The photos themselves are sent to Anthropic.')),
       status, run
     ];
   }, { onClose: () => { bus.picking = false; } });
